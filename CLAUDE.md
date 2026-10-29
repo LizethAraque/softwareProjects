@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 # Activate virtual environment (Windows)
-venv\Scripts\activate
+.venv\Scripts\Activate.ps1
 
 # Run the app
 python transcriptor_reuniones.py
@@ -17,10 +17,10 @@ The Gradio UI starts at `http://localhost:7860` and opens in the browser automat
 ## Installing Dependencies
 
 ```bash
-pip install gradio openai-whisper torch imageio[ffmpeg] imageio-ffmpeg ffmpeg-python
+pip install -r requirements.txt
 ```
 
-No `requirements.txt` exists — the venv is the source of truth for installed packages.
+The `.venv` directory is the project's single local Python environment.
 
 ## Architecture
 

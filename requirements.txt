@@ -1,0 +1,5 @@
+gradio==6.31.0
+openai-whisper==20250625
+torch==2.15.0
+numpy==2.5.4
+imageio-ffmpeg==0.7.0

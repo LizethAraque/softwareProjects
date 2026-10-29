@@ -31,6 +31,7 @@ MODELOS = {
     "small  – Buena precisión": "small",
     "medium – Alta precisión (más lento)": "medium",
     "large  – Máxima precisión (muy lento)": "large",
+    "turbo  – Alta calidad y rápido": "turbo",
 }
 
 IDIOMAS = {
@@ -51,6 +52,42 @@ def _formatear_tiempo(segundos):
     m = int((segundos % 3600) // 60)
     s = int(segundos % 60)
     return f"{h:02d}:{m:02d}:{s:02d}"
+
+
+def _formatear_transcripcion(segmentos, texto_original):
+    if not segmentos:
+        return texto_original.strip()
+
+    parrafos = []
+    fragmentos = []
+    longitud_parrafo = 0
+    fin_anterior = None
+    ultimo_fragmento = ""
+
+    for segmento in segmentos:
+        texto = segmento["text"].strip()
+        if not texto:
+            continue
+
+        inicio = segmento.get("start", 0)
+        pausa = fin_anterior is not None and inicio - fin_anterior >= 1.5
+        fin_de_oracion = ultimo_fragmento.endswith((".", "!", "?"))
+        parrafo_largo = longitud_parrafo >= 400 and fin_de_oracion
+
+        if fragmentos and (pausa or parrafo_largo):
+            parrafos.append(" ".join(fragmentos))
+            fragmentos = []
+            longitud_parrafo = 0
+
+        fragmentos.append(texto)
+        longitud_parrafo += len(texto) + (1 if len(fragmentos) > 1 else 0)
+        ultimo_fragmento = texto
+        fin_anterior = segmento.get("end", inicio)
+
+    if fragmentos:
+        parrafos.append(" ".join(fragmentos))
+
+    return "\n\n".join(parrafos)
 
 
 def _extraer_audio_numpy(ruta_video: str) -> np.ndarray:
@@ -78,9 +115,16 @@ def _extraer_audio_numpy(ruta_video: str) -> np.ndarray:
     return samples
 
 
-def transcribir(archivo, nombre_modelo, idioma_seleccionado, incluir_timestamps):
+def transcribir(
+    archivo,
+    nombre_modelo,
+    idioma_seleccionado,
+    incluir_timestamps,
+    progress=gr.Progress(track_tqdm=True),
+):
     ruta_copia = None
     try:
+        progress(0, desc="Validando el video...")
         if archivo is None:
             return "⚠️ Sube un archivo de video antes de transcribir.", "", ""
 
@@ -100,9 +144,11 @@ def transcribir(archivo, nombre_modelo, idioma_seleccionado, incluir_timestamps)
         shutil.copy2(ruta_original, ruta_copia)
 
         # Extraer audio como numpy array (sin llamar ffmpeg del sistema)
+        progress(0, desc="Extrayendo audio...")
         audio_np = _extraer_audio_numpy(ruta_copia)
 
         # Cargar modelo Whisper y transcribir pasando el array directamente
+        progress(0, desc="Cargando el modelo...")
         modelo = whisper.load_model(MODELOS[nombre_modelo])
         opciones = {"verbose": False}
         idioma_key = IDIOMAS[idioma_seleccionado]
@@ -110,9 +156,12 @@ def transcribir(archivo, nombre_modelo, idioma_seleccionado, incluir_timestamps)
             opciones["language"] = idioma_key
 
         # Whisper acepta numpy array float32 directamente
+        progress(0, desc="Transcribiendo...")
         resultado = modelo.transcribe(audio_np, **opciones)
 
-        texto_plano = resultado["text"].strip()
+        texto_plano = _formatear_transcripcion(
+            resultado.get("segments", []), resultado["text"]
+        )
 
         texto_timestamps = ""
         if incluir_timestamps and resultado.get("segments"):
@@ -131,6 +180,7 @@ def transcribir(archivo, nombre_modelo, idioma_seleccionado, incluir_timestamps)
             f"⏱️  Duración  : {_formatear_tiempo(duracion)}\n"
             f"📝 Palabras  : {len(texto_plano.split())}"
         )
+        progress(1, desc="Transcripción completada")
         return info, texto_plano, texto_timestamps
 
     except Exception as e:
@@ -176,19 +226,29 @@ with gr.Blocks(title="Transcriptor de Reuniones") as app:
                 with gr.Tab("📄 Transcripción"):
                     txt_out     = gr.Textbox(label="Texto", lines=22, placeholder="Aquí aparecerá el resultado…")
                     btn_guardar = gr.Button("💾 Guardar .txt en Documentos")
-                    descarga    = gr.File(label="Archivo guardado", visible=False)
+                    descarga = gr.File(
+                        label="Descargar transcripción", interactive=False
+                    )
                 with gr.Tab("🕐 Con timestamps"):
                     ts_out      = gr.Textbox(label="Con marcas de tiempo", lines=22, placeholder="Aquí aparecerán los timestamps…")
                     btn_gts     = gr.Button("💾 Guardar timestamps en Documentos")
-                    descarga_ts = gr.File(label="Archivo guardado", visible=False)
+                    descarga_ts = gr.File(
+                        label="Descargar timestamps", interactive=False
+                    )
 
     btn.click(fn=transcribir, inputs=[archivo_input, modelo_selector, idioma_selector, incluir_ts], outputs=[estado, txt_out, ts_out])
 
-    btn_guardar.click(fn=lambda t: guardar_transcripcion(t, "transcripcion"), inputs=[txt_out], outputs=[descarga]
-    ).then(fn=lambda f: gr.File(visible=bool(f), value=f), inputs=[descarga], outputs=[descarga])
+    btn_guardar.click(
+        fn=lambda t: guardar_transcripcion(t, "transcripcion"),
+        inputs=[txt_out],
+        outputs=[descarga],
+    )
 
-    btn_gts.click(fn=lambda t: guardar_transcripcion(t, "timestamps"), inputs=[ts_out], outputs=[descarga_ts]
-    ).then(fn=lambda f: gr.File(visible=bool(f), value=f), inputs=[descarga_ts], outputs=[descarga_ts])
+    btn_gts.click(
+        fn=lambda t: guardar_transcripcion(t, "timestamps"),
+        inputs=[ts_out],
+        outputs=[descarga_ts],
+    )
 
     gr.Markdown("---\n🔒 **Todo se procesa localmente.** Los .txt se guardan en `Documentos\\Transcripciones\\`")
 
@@ -197,4 +257,4 @@ if __name__ == "__main__":
     print("=" * 55)
     print("  🎙️  Transcriptor de Reuniones")
     print("=" * 55)
-    app.launch(server_name="0.0.0.0", inbrowser=True)
+    app.queue().launch(server_name="0.0.0.0", inbrowser=True)
